@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no"/>
+<meta name="theme-color" content="#0a0f1a"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="Commute"/>
+<meta name="mobile-web-app-capable" content="yes"/>
+<title>Commute Watch</title>
+<link rel="manifest" href="manifest.json"/>
+<link rel="apple-touch-icon" href="icon-192.png"/>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+  html,body{height:100%;overscroll-behavior:none;}
+  body{background:#0f172a;font-family:'Inter',system-ui,sans-serif;color:#f1f5f9;min-height:100vh;min-height:-webkit-fill-available;}
+  @keyframes spin{to{transform:rotate(360deg);}}
+  @keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid #475569;border-top-color:#94a3b8;border-radius:50%;animation:spin 0.8s linear infinite;}
+  .skel{background:linear-gradient(90deg,#1e293b 25%,#263548 50%,#1e293b 75%);background-size:200% 100%;animation:shimmer 1.4s infinite;border-radius:10px;}
+  .badge{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;}
+  .badge-clear{background:#d1fae5;color:#065f46;}
+  .badge-moderate{background:#fef3c7;color:#92400e;}
+  .badge-heavy{background:#fee2e2;color:#991b1b;}
+  .badge-unknown{background:#1e293b;color:#64748b;}
+  .dot{display:inline-block;border-radius:50%;flex-shrink:0;}
+  .dot-clear{background:#10b981;}
+  .dot-moderate{background:#f59e0b;}
+  .dot-heavy{background:#ef4444;box-shadow:0 0 0 3px #ef444433;}
+  .dot-unknown{background:#475569;}
+  button{font-family:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;}
+  a{text-decoration:none;-webkit-tap-highlight-color:transparent;}
+  .tap-btn{transition:opacity 0.15s;}.tap-btn:active{opacity:0.7;}
+
+  /* Offline banner */
+  #offline-bar{display:none;background:#92400e;color:#fef3c7;text-align:center;padding:6px;font-size:12px;font-weight:600;}
+  body.offline #offline-bar{display:block;}
+
+  /* Install prompt */
+  #install-prompt{display:none;position:fixed;bottom:0;left:0;right:0;background:#1e293b;border-top:1px solid #334155;padding:14px 16px;z-index:50;max-width:480px;margin:0 auto;}
+</style>
+</head>
+<body>
+
+<div id="offline-bar">📵 Offline — showing last cached analysis</div>
+
+<div style="max-width:480px;margin:0 auto;padding-bottom:60px;">
+
+  <!-- Header -->
+  <div style="background:#0a0f1a;border-bottom:1px solid #1e293b;padding:13px 16px;position:sticky;top:0;z-index:10;">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <div style="font-weight:800;font-size:17px;color:#f1f5f9;">🚗 Commute Watch</div>
+        <div id="clock-line" style="font-size:11px;color:#334155;margin-top:1px;"></div>
+      </div>
+      <div id="tab-hint"></div>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div style="padding:12px 14px 0;">
+    <div style="display:grid;grid-template-columns:1fr 1fr;background:#1e293b;border-radius:12px;padding:4px;">
+      <button id="tab-morning" onclick="switchTab('morning')" class="tap-btn"
+        style="padding:10px 4px;border-radius:9px;border:1px solid transparent;font-weight:700;font-size:12px;transition:all 0.2s;display:flex;align-items:center;justify-content:center;gap:4px;">
+        🏠→🏢 <span>Home→Office</span>
+        <span id="lc-morning" style="font-size:10px;padding:1px 5px;border-radius:10px;font-weight:700;background:#0f172a;color:#334155;">0</span>
+      </button>
+      <button id="tab-evening" onclick="switchTab('evening')" class="tap-btn"
+        style="padding:10px 4px;border-radius:9px;border:1px solid transparent;font-weight:700;font-size:12px;transition:all 0.2s;display:flex;align-items:center;justify-content:center;gap:4px;">
+        🏢→🏠 <span>Office→Home</span>
+        <span id="lc-evening" style="font-size:10px;padding:1px 5px;border-radius:10px;font-weight:700;background:#0f172a;color:#334155;">0</span>
+      </button>
+    </div>
+  </div>
+
+  <div id="panel" style="padding:12px 14px 0;"></div>
+</div>
+
+<!-- Install prompt (shown on first visit if not installed) -->
+<div id="install-prompt">
+  <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;">
+    <div>
+      <div style="font-weight:700;font-size:14px;color:#f1f5f9;">Install as app</div>
+      <div style="font-size:12px;color:#64748b;">Add to home screen for one-tap access</div>
+    </div>
+    <div style="display:flex;gap:8px;flex-shrink:0;">
+      <button onclick="dismissInstall()" style="background:none;border:1px solid #334155;border-radius:8px;padding:7px 12px;font-size:12px;color:#64748b;font-family:inherit;">Later</button>
+      <button onclick="installApp()" id="install-btn" style="background:#06b6d4;border:none;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:700;color:#fff;font-family:inherit;">Install</button>
+    </div>
+  </div>
+</div>
+
+<!-- Training Modal -->
+<div id="tmodal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:100;align-items:flex-end;justify-content:center;">
+  <div style="background:#0f172a;border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:20px 18px 40px;border:1px solid #1e293b;max-height:90vh;overflow-y:auto;">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">
+      <div style="font-weight:800;font-size:16px;color:#f1f5f9;">📝 Log this commute</div>
+      <button onclick="closeT()" style="background:none;border:none;font-size:24px;color:#475569;padding:4px;">✕</button>
+    </div>
+    <div id="tsub" style="font-size:12px;color:#475569;margin-bottom:16px;"></div>
+    <div id="tcp"></div>
+    <div style="margin-bottom:14px;">
+      <div style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">Route taken</div>
+      <div style="display:flex;gap:7px;" id="trt"></div>
+    </div>
+    <div style="margin-bottom:14px;">
+      <div style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">Actual time (minutes)</div>
+      <input id="tact" type="number" placeholder="e.g. 38" style="width:100%;padding:10px 12px;border-radius:10px;font-size:14px;border:1.5px solid #334155;outline:none;background:#1e293b;color:#f1f5f9;font-family:inherit;"/>
+    </div>
+    <div style="margin-bottom:18px;">
+      <div style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">Notes (optional)</div>
+      <textarea id="tnotes" placeholder="e.g. tunnel was clear, NH-48 jammed…" rows="2" style="width:100%;padding:10px 12px;border-radius:10px;font-size:13px;border:1.5px solid #334155;outline:none;resize:none;background:#1e293b;color:#f1f5f9;font-family:inherit;"></textarea>
+    </div>
+    <button id="tsave" onclick="saveT()" style="width:100%;color:#fff;border:none;border-radius:12px;padding:13px 0;font-weight:800;font-size:15px;font-family:inherit;">Save to Training Log</button>
+  </div>
+</div>
+
+<script>
+// ─── CONFIG ───────────────────────────────────────────────────────────────────
+const AUTO_REFRESH = 8 * 60 * 1000;
+
+const ROUTES = {
+  morning:{
+    id:"morning", label:"Home → Office", emoji:"🏠→🏢",
+    fromLabel:"Shree Awas Apartments, Dwarka Sec 19",
+    toLabel:"Ameriprise Financial, Sector 18, Gurugram",
+    expyColor:"#06b6d4",
+    mapsExpy:"https://www.google.com/maps/dir/28.5733,77.0579/28.4595,77.0266/@28.516,77.043,13z?travelmode=driving",
+    mapsBij:"https://www.google.com/maps/dir/28.5733,77.0579/28.5094,77.0630/28.4595,77.0266/@28.516,77.043,12z?travelmode=driving",
+    checkpoints:[
+      {id:"cp1",label:"Sector 21 merge",    sublabel:"Entry onto expressway from Dwarka",         isCritical:false},
+      {id:"cp2",label:"Mid-expressway",      sublabel:"Tunnel stretch begins",                      isCritical:false},
+      {id:"cp3",label:"Last tunnel exit ⚠️", sublabel:"NH-48 merge — Sheetla Mata (90% jam risk)", isCritical:true},
+    ],
+    aiCtx:`MORNING (Home→Office): Shree Awas Apartments Dwarka → Ameriprise Financial Sector 18 Gurugram (19km).
+Baseline: Expy 32min clear, Bijwasan 37min clear.
+Critical: LAST TUNNEL EXIT onto NH-48 (Sheetla Mata/Kherki Daula) — 90% jam at peak.
+Checkpoints: (1) Sector 21 merge → (2) mid-expressway → (3) last tunnel exit [CRITICAL].
+Rule: take Bijwasan only if Expy is 10–15+ min slower.`,
+  },
+  evening:{
+    id:"evening", label:"Office → Home", emoji:"🏢→🏠",
+    fromLabel:"Ameriprise Financial, Sector 18, Gurugram",
+    toLabel:"Shree Awas Apartments, Dwarka Sec 19",
+    expyColor:"#f97316",
+    mapsExpy:"https://www.google.com/maps/dir/28.4595,77.0266/28.5733,77.0579/@28.516,77.043,13z?travelmode=driving",
+    mapsBij:"https://www.google.com/maps/dir/28.4595,77.0266/28.5094,77.0630/28.5733,77.0579/@28.516,77.043,12z?travelmode=driving",
+    checkpoints:[
+      {id:"cp1",label:"NH-48 → Expy entry ⚠️",sublabel:"Gurugram merge — worst evening bottleneck",isCritical:true},
+      {id:"cp2",label:"Tunnel section",         sublabel:"Through the expressway tunnels",           isCritical:false},
+      {id:"cp3",label:"Sector 21 exit",         sublabel:"Exiting expressway into Dwarka",           isCritical:false},
+    ],
+    aiCtx:`EVENING (Office→Home): Ameriprise Financial Sector 18 Gurugram → Shree Awas Apartments Dwarka (19km).
+Baseline: Expy 35min clear, Bijwasan 40min clear.
+Critical: NH-48 → Dwarka Expressway ENTRY from Gurugram side — worst evening congestion.
+Checkpoints: (1) NH-48 entry [CRITICAL] → (2) tunnel section → (3) Sector 21 exit.
+Rule: take Bijwasan only if Expy is 10–15+ min slower.`,
+  },
+};
+
+// ─── STATE ────────────────────────────────────────────────────────────────────
+let tab    = new Date().getHours() < 14 ? "morning" : "evening";
+let logs   = {morningLog:[], eveningLog:[]};
+let res    = {morning:null, evening:null};
+let busy   = false;
+let lastTs = null;
+let mform  = {cp1:"moderate",cp2:"moderate",cp3:"heavy",routeTaken:"expressway"};
+let deferredInstallPrompt = null;
+
+// ─── STORAGE ──────────────────────────────────────────────────────────────────
+function load(){
+  try{
+    const s=localStorage.getItem("cw10");
+    if(s){ const p=JSON.parse(s); logs=p.logs||logs; res=p.res||res; lastTs=p.lastTs||null; }
+  }catch{}
+}
+function save(){
+  try{ localStorage.setItem("cw10",JSON.stringify({logs,res,lastTs})); }catch{}
+}
+
+// ─── HELPERS ──────────────────────────────────────────────────────────────────
+const ft  = d=>d.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit",hour12:true});
+const fd  = d=>d.toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"});
+const pk  = (d=new Date())=>{const h=d.getHours();return(h>=8&&h<=11)||(h>=17&&h<=21);};
+const wk  = (d=new Date())=>d.getDay()===0||d.getDay()===6;
+const ago = ts=>{const m=Math.floor((Date.now()-ts)/60000);return m<1?"just now":m===1?"1 min ago":`${m} min ago`;};
+const BL  = {clear:"Clear",moderate:"Moderate",heavy:"Heavy",unknown:"—"};
+const DC  = {clear:"#10b981",moderate:"#f59e0b",heavy:"#ef4444",unknown:"#475569"};
+const TC  = {clear:"#065f46",moderate:"#92400e",heavy:"#991b1b",unknown:"#64748b"};
+
+// ─── OFFLINE DETECTION ────────────────────────────────────────────────────────
+function updateOnlineStatus(){
+  document.body.classList.toggle("offline", !navigator.onLine);
+}
+window.addEventListener("online",  updateOnlineStatus);
+window.addEventListener("offline", updateOnlineStatus);
+updateOnlineStatus();
+
+// ─── CLOCK ────────────────────────────────────────────────────────────────────
+function tick(){
+  const now=new Date(),p=pk(now);
+  document.getElementById("clock-line").innerHTML=
+    `${fd(now)} · ${ft(now)} <span style="margin-left:6px;color:${p?"#ef4444":"#10b981"};font-weight:700;">${p?"● Peak hour":"● Off-peak"}</span>`;
+  const sug=now.getHours()<14?"morning":"evening";
+  document.getElementById("tab-hint").innerHTML=sug!==tab
+    ?`<button onclick="switchTab('${sug}')" class="tap-btn" style="background:#1e293b;border:1px solid #334155;border-radius:8px;padding:5px 10px;font-size:11px;color:#f59e0b;font-weight:700;font-family:inherit;">Switch →</button>`:"";
+}
+setInterval(tick,30000); tick();
+
+// ─── CLAUDE ANALYSIS ──────────────────────────────────────────────────────────
+async function analyse(){
+  if(!navigator.onLine) throw new Error("offline");
+  const cfg=ROUTES[tab];
+  const now=new Date();
+  const tlog=(logs[`${tab}Log`]||[]).slice(-10).reverse();
+  const tctx=tlog.length
+    ?"USER TRAINING DATA (most recent first):\n"+tlog.map(l=>`- ${l.date} ${l.time}: CP1=${l.cp1}, CP2=${l.cp2}, CP3=${l.cp3}, took ${l.routeTaken}, actual=${l.actualMinutes}min. Notes:"${l.notes}"`).join("\n")
+    :"No training data yet — use typical Delhi-NCR patterns.";
+
+  const prompt=`You are a hyperlocal Delhi-NCR traffic intelligence system.
+
+${cfg.aiCtx}
+
+TIME: ${ft(now)} on ${now.toLocaleDateString("en-IN",{weekday:"long"})}
+PEAK: ${pk(now)?"YES":"NO"} | WEEKEND: ${wk(now)?"YES":"NO"}
+
+${tctx}
+
+Give a realistic assessment. For peak hours be honest about congestion at critical checkpoints.
+
+Respond ONLY in exact JSON (no markdown):
+{
+  "expy":{"estimatedMin":<n>,"delayMin":<n>,"overall":"clear|moderate|heavy","checkpoints":{"cp1":{"status":"clear|moderate|heavy","note":"<6 words>"},"cp2":{"status":"clear|moderate|heavy","note":"<6 words>"},"cp3":{"status":"clear|moderate|heavy","note":"<8 words>"}}},
+  "bij":{"estimatedMin":<n>,"delayMin":<n>,"overall":"clear|moderate|heavy"},
+  "recommendation":"expressway|bijwasan",
+  "timeDelta":<expy min - bij min>,
+  "verdict":"<max 15 words, mention estimated minutes>",
+  "tip":"<max 18 words, practical>"
+}`;
+
+  const r=await fetch("https://api.anthropic.com/v1/messages",{
+    method:"POST",headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({model:"claude-sonnet-4-20250514",max_tokens:700,messages:[{role:"user",content:prompt}]}),
+  });
+  const d=await r.json();
+  return JSON.parse((d.content?.[0]?.text||"{}").replace(/```json|```/g,"").trim());
+}
+
+// ─── FETCH ────────────────────────────────────────────────────────────────────
+async function doFetch(silent=false){
+  if(busy) return;
+
+  // If offline, show cached result silently
+  if(!navigator.onLine){
+    if(!silent) toast("📵 Offline — showing cached analysis");
+    renderPanel(); return;
+  }
+
+  busy=true;
+  if(!silent) renderPanel();
+  try{
+    const data=await analyse();
+    res[tab]={data,ts:Date.now()};
+    lastTs=Date.now();
+    save();
+  }catch(e){
+    if(e.message!=="offline") res[tab]={error:e.message||"Analysis failed."};
+  }
+  busy=false;
+  renderPanel();
+}
+setInterval(()=>doFetch(true), AUTO_REFRESH);
+
+// ─── RENDER ───────────────────────────────────────────────────────────────────
+function renderPanel(){
+  const cfg=ROUTES[tab],r=res[tab],ac=cfg.expyColor,log=logs[`${tab}Log`]||[];
+  let h="";
+
+  // Route strip
+  h+=`<div style="background:#1e293b;border-radius:12px;padding:11px 13px;margin-bottom:12px;border:1px solid #334155;">
+    <div style="font-size:11px;color:#475569;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:5px;">Route</div>
+    <div style="font-size:12px;color:#94a3b8;line-height:1.7;">
+      <span style="color:#64748b;">From</span> ${cfg.fromLabel}<br>
+      <span style="color:#64748b;">To&nbsp;&nbsp;&nbsp;&nbsp;</span> ${cfg.toLabel}
+    </div>
+  </div>`;
+
+  // Action bar
+  h+=`<div style="display:flex;gap:8px;margin-bottom:10px;">
+    <button onclick="doFetch(false)" ${busy?"disabled":""} class="tap-btn"
+      style="flex:1;background:${busy?"#1e293b":`linear-gradient(135deg,${ac},#0284c7)`};color:${busy?"#475569":"#fff"};border:${busy?"1px solid #334155":"none"};border-radius:12px;padding:13px 0;font-weight:800;font-size:15px;display:flex;align-items:center;justify-content:center;gap:8px;font-family:inherit;">
+      ${busy?`<span class="spinner"></span> Analysing…`:"⚡ Check Traffic"}
+    </button>
+    <button onclick="openT()" class="tap-btn" style="background:#1e293b;border:1px solid #334155;border-radius:12px;padding:13px 14px;color:#94a3b8;font-weight:700;font-size:13px;font-family:inherit;">+ Log</button>
+  </div>`;
+
+  // Status line
+  const isStale = lastTs && (Date.now()-lastTs) > 20*60*1000;
+  h+=`<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;">
+    <span style="font-size:11px;color:#475569;display:flex;align-items:center;gap:4px;">
+      <span style="color:${busy?"#f59e0b":navigator.onLine?"#10b981":"#ef4444"};font-size:9px;">●</span>
+      ${busy?"Analysing…":!navigator.onLine?"Offline — cached":lastTs?`Updated ${ago(lastTs)}${isStale?" · may be stale":""}` :"Tap Check Traffic"}
+    </span>
+    <span style="font-size:10px;color:#334155;">Auto-refresh every 8 min</span>
+  </div>`;
+
+  // Error
+  if(r?.error) h+=`<div style="background:#7f1d1d22;border:1px solid #ef444433;border-radius:12px;padding:12px 14px;margin-bottom:12px;font-size:13px;color:#fca5a5;">⚠️ ${r.error}</div>`;
+
+  // Skeleton
+  if(busy&&!r?.data){
+    h+=`<div class="skel" style="height:90px;margin-bottom:10px;"></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
+      <div class="skel" style="height:100px;"></div><div class="skel" style="height:100px;"></div>
+    </div>
+    <div class="skel" style="height:180px;margin-bottom:10px;"></div>`;
+  }
+
+  if(r?.data){
+    const {expy,bij,recommendation:rec,timeDelta:delta,verdict,tip}=r.data;
+
+    // Verdict
+    h+=`<div style="background:${rec==="expressway"?`linear-gradient(135deg,${ac}22,${ac}0d)`:"linear-gradient(135deg,#4c1d9540,#4c1d9520)"};border-radius:14px;padding:14px 15px;margin-bottom:12px;border:1.5px solid ${rec==="expressway"?ac+"55":"#7c3aed55"};">
+      <div style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:1px;margin-bottom:4px;">Recommendation</div>
+      <div style="font-weight:800;font-size:18px;color:#f1f5f9;margin-bottom:4px;">${rec==="expressway"?"🛣 Take Dwarka Expressway":"🔄 Take Bijwasan Bypass"}</div>
+      <div style="font-size:13px;color:#94a3b8;line-height:1.5;margin-bottom:8px;">${verdict||""}</div>
+      <div style="display:inline-block;background:rgba(255,255,255,0.07);border-radius:8px;padding:4px 10px;font-size:12px;color:#94a3b8;font-weight:600;">
+        ${delta>0?`Expy ~${delta} min slower`:delta<0?`Expy ~${Math.abs(delta)} min faster`:"Both routes equal"} right now
+      </div>
+    </div>`;
+
+    // ETA cards
+    h+=`<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:12px;">
+      <div style="background:#1e293b;border-radius:12px;padding:12px 13px;border:${rec==="expressway"?`2px solid ${ac}`:"1px solid #334155"};">
+        <div style="font-size:10px;font-weight:700;color:${rec==="expressway"?ac:"#475569"};text-transform:uppercase;letter-spacing:0.8px;margin-bottom:4px;">🛣 Expy</div>
+        <div style="font-size:28px;font-weight:800;color:#f1f5f9;letter-spacing:-1px;line-height:1;">${expy.estimatedMin}<span style="font-size:13px;font-weight:500;color:#475569;"> min</span></div>
+        <div style="font-size:11px;color:#334155;margin:3px 0 6px;">${expy.delayMin>0?`+${expy.delayMin} min above baseline`:"Near free-flow"}</div>
+        <span class="badge badge-${expy.overall}">${BL[expy.overall]||"—"}</span>
+      </div>
+      <div style="background:#1e293b;border-radius:12px;padding:12px 13px;border:${rec==="bijwasan"?"2px solid #8b5cf6":"1px solid #334155"};">
+        <div style="font-size:10px;font-weight:700;color:${rec==="bijwasan"?"#a78bfa":"#475569"};text-transform:uppercase;letter-spacing:0.8px;margin-bottom:4px;">🔄 Bijwasan</div>
+        <div style="font-size:28px;font-weight:800;color:#f1f5f9;letter-spacing:-1px;line-height:1;">${bij.estimatedMin}<span style="font-size:13px;font-weight:500;color:#475569;"> min</span></div>
+        <div style="font-size:11px;color:#334155;margin:3px 0 6px;">${bij.delayMin>0?`+${bij.delayMin} min above baseline`:"Near free-flow"}</div>
+        <span class="badge badge-${bij.overall}">${BL[bij.overall]||"—"}</span>
+      </div>
+    </div>`;
+
+    // Checkpoints
+    h+=`<div style="background:#1e293b;border-radius:14px;padding:13px;margin-bottom:12px;border:1px solid #334155;">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:11px;">
+        <div style="font-size:11px;font-weight:700;color:#334155;text-transform:uppercase;letter-spacing:0.8px;">🛣 Checkpoints</div>
+        <div style="font-size:10px;color:#334155;">AI · pattern-based</div>
+      </div>`;
+    cfg.checkpoints.forEach((cp,i)=>{
+      const cpd=expy.checkpoints?.[cp.id]||{},s=cpd.status||"unknown";
+      h+=`<div style="display:flex;align-items:flex-start;gap:10px;position:relative;">
+        ${i<cfg.checkpoints.length-1?`<div style="position:absolute;left:5px;top:18px;width:2px;height:calc(100% + 4px);background:#0f172a;"></div>`:""}
+        <div style="padding-top:3px;flex-shrink:0;z-index:1;"><span class="dot dot-${s}" style="width:12px;height:12px;"></span></div>
+        <div style="flex:1;background:${cp.isCritical?DC[s]+"12":"#0f172a"};border-radius:10px;padding:8px 10px;margin-bottom:6px;border:${cp.isCritical?`1.5px solid ${DC[s]}44`:"1px solid #0f172a"};">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:6px;flex-wrap:wrap;">
+            <div style="display:flex;align-items:center;gap:6px;">
+              <span style="font-size:12px;font-weight:700;color:#f1f5f9;">${cp.label}</span>
+              ${cp.isCritical?`<span style="font-size:10px;background:#7f1d1d;color:#fca5a5;padding:1px 6px;border-radius:10px;font-weight:700;">HIGH RISK</span>`:""}
+            </div>
+            <span class="badge badge-${s}">${BL[s]}</span>
+          </div>
+          <div style="font-size:11px;color:#475569;margin-top:2px;">${cp.sublabel}</div>
+          ${cpd.note?`<div style="font-size:11px;color:${TC[s]};font-weight:600;margin-top:3px;">${cpd.note}</div>`:""}
+        </div>
+      </div>`;
+    });
+    h+=`</div>`;
+
+    if(tip) h+=`<div style="background:#1e293b;border-radius:12px;padding:10px 13px;margin-bottom:12px;border:1px solid #334155;display:flex;gap:10px;align-items:flex-start;">
+      <span>💡</span><div style="font-size:12px;color:#64748b;line-height:1.6;">${tip}</div>
+    </div>`;
+
+    h+=`<div style="background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:8px 12px;margin-bottom:12px;font-size:11px;color:#334155;text-align:center;line-height:1.6;">
+      ⚠️ AI estimates based on time & training data — not a live feed.<br>Tap Maps buttons below for real-time traffic.
+    </div>`;
+  }
+
+  // Maps buttons
+  h+=`<div style="margin-bottom:6px;font-size:11px;font-weight:700;color:#334155;text-transform:uppercase;letter-spacing:0.8px;">Open with live traffic in Google Maps</div>
+  <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">
+    <a href="${cfg.mapsExpy}" target="_blank" class="tap-btn" style="background:${ac}18;border:1.5px solid ${ac}44;border-radius:11px;padding:12px 0;text-align:center;font-size:13px;font-weight:700;color:${ac};display:block;">🛣 Expy Route</a>
+    <a href="${cfg.mapsBij}"  target="_blank" class="tap-btn" style="background:#2d1b6920;border:1.5px solid #7c3aed44;border-radius:11px;padding:12px 0;text-align:center;font-size:13px;font-weight:700;color:#a78bfa;display:block;">🔄 Bijwasan Route</a>
+  </div>`;
+
+  // Training log
+  h+=`<button onclick="toggleLog()" id="ltbtn" class="tap-btn" style="width:100%;background:none;border:1px solid #1e293b;border-radius:10px;padding:9px 0;color:#334155;font-weight:600;font-size:12px;margin-bottom:8px;font-family:inherit;">
+    ▼ Training log (${log.length} entries)
+  </button>
+  <div id="lpanel" style="display:none;background:#1e293b;border-radius:12px;padding:13px;border:1px solid #334155;margin-bottom:14px;">`;
+  if(!log.length){
+    h+=`<div style="font-size:13px;color:#334155;text-align:center;padding:12px 0;">No logs yet.<br>Tap "+ Log" after each commute — AI gets smarter every time.</div>`;
+  }else{
+    [...log].reverse().slice(0,7).forEach(e=>{
+      const rc=e.routeTaken==="expressway"?cfg.expyColor:"#a78bfa";
+      h+=`<div style="background:#0f172a;border-radius:9px;padding:9px 11px;border:1px solid #1e293b;font-size:12px;margin-bottom:7px;">
+        <div style="display:flex;justify-content:space-between;margin-bottom:3px;">
+          <span style="color:#475569;font-weight:600;">${e.date} ${e.time}</span>
+          <span style="color:${rc};font-weight:700;">${e.routeTaken==="expressway"?"🛣 Expy":"🔄 Bijwasan"}</span>
+        </div>
+        <div style="color:#334155;display:flex;gap:8px;flex-wrap:wrap;margin-bottom:2px;">
+          ${["cp1","cp2","cp3"].map(k=>e[k]?`<span style="display:flex;align-items:center;gap:3px;"><span class="dot dot-${e[k]}" style="width:7px;height:7px;"></span><span style="font-size:10px;">${k.toUpperCase()}</span></span>`:"").join("")}
+          ${e.actualMinutes?`<span style="color:#475569;">${e.actualMinutes} min actual</span>`:""}
+        </div>
+        ${e.notes?`<div style="color:#334155;font-style:italic;font-size:11px;">"${e.notes}"</div>`:""}
+      </div>`;
+    });
+    if(log.length>7) h+=`<div style="font-size:11px;color:#1e293b;text-align:center;padding-top:4px;">+ ${log.length-7} older entries</div>`;
+  }
+  h+=`</div>`;
+  document.getElementById("panel").innerHTML=h;
+}
+
+// ─── TABS ─────────────────────────────────────────────────────────────────────
+function switchTab(t){
+  tab=t; updateTabs(); renderPanel();
+  if(!res[t]||res[t].error) doFetch(false);
+  else doFetch(true);
+}
+function updateTabs(){
+  ["morning","evening"].forEach(t=>{
+    const btn=document.getElementById(`tab-${t}`),ac=ROUTES[t].expyColor,a=t===tab;
+    btn.style.background=a?"#0f172a":"transparent";
+    btn.style.border=a?`1px solid ${ac}44`:"1px solid transparent";
+    btn.style.color=a?ac:"#475569";
+    const lc=document.getElementById(`lc-${t}`);
+    lc.style.background=a?`${ac}22`:"#0f172a"; lc.style.color=a?ac:"#334155";
+    lc.textContent=(logs[`${t}Log`]||[]).length;
+  });
+}
+
+// ─── LOG ──────────────────────────────────────────────────────────────────────
+function toggleLog(){
+  const p=document.getElementById("lpanel"),b=document.getElementById("ltbtn");
+  if(!p||!b)return;
+  const show=p.style.display==="none";
+  p.style.display=show?"block":"none";
+  b.textContent=(show?"▲":"▼")+` Training log (${(logs[`${tab}Log`]||[]).length} entries)`;
+}
+
+// ─── TRAINING MODAL ───────────────────────────────────────────────────────────
+function openT(){
+  const cfg=ROUTES[tab];
+  mform={cp1:"moderate",cp2:"moderate",cp3:"heavy",routeTaken:"expressway"};
+  document.getElementById("tsub").textContent=`${cfg.emoji} ${cfg.label}`;
+  document.getElementById("tact").value=""; document.getElementById("tnotes").value="";
+  document.getElementById("tsave").style.background=`linear-gradient(135deg,${cfg.expyColor},#0284c7)`;
+  let ch="";
+  cfg.checkpoints.forEach(cp=>{
+    ch+=`<div style="margin-bottom:14px;">
+      <div style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:6px;">${cp.label}</div>
+      <div style="display:flex;gap:7px;flex-wrap:wrap;">
+        <button onclick="smf('${cp.id}','clear')"    id="mo-${cp.id}-clear"    class="tap-btn" style="padding:6px 11px;border-radius:8px;font-size:12px;font-weight:600;background:#1e293b;color:#64748b;border:2px solid #334155;font-family:inherit;">✅ Clear</button>
+        <button onclick="smf('${cp.id}','moderate')" id="mo-${cp.id}-moderate" class="tap-btn" style="padding:6px 11px;border-radius:8px;font-size:12px;font-weight:600;background:#f59e0b20;color:#f59e0b;border:2px solid #f59e0b;font-family:inherit;">⚠️ Moderate</button>
+        <button onclick="smf('${cp.id}','heavy')"    id="mo-${cp.id}-heavy"    class="tap-btn" style="padding:6px 11px;border-radius:8px;font-size:12px;font-weight:600;background:#1e293b;color:#64748b;border:2px solid #334155;font-family:inherit;">🔴 Jammed</button>
+      </div></div>`;
+  });
+  document.getElementById("tcp").innerHTML=ch;
+  const ac=cfg.expyColor;
+  document.getElementById("trt").innerHTML=`
+    <button onclick="smf('routeTaken','expressway')" id="mo-rt-expy" class="tap-btn" style="padding:6px 11px;border-radius:8px;font-size:12px;font-weight:600;background:${ac}20;color:${ac};border:2px solid ${ac};font-family:inherit;">🛣 Expy</button>
+    <button onclick="smf('routeTaken','bijwasan')"   id="mo-rt-bij"  class="tap-btn" style="padding:6px 11px;border-radius:8px;font-size:12px;font-weight:600;background:#1e293b;color:#64748b;border:2px solid #334155;font-family:inherit;">🔄 Bijwasan</button>`;
+  document.getElementById("tmodal").style.display="flex";
+}
+function smf(f,v){
+  mform[f]=v;
+  if(f==="routeTaken"){
+    const ac=ROUTES[tab].expyColor;
+    [["expy","expressway",ac],["bij","bijwasan","#8b5cf6"]].forEach(([k,val,c])=>{
+      const b=document.getElementById(`mo-rt-${k}`);if(!b)return;
+      const sel=val===v; b.style.background=sel?`${c}20`:"#1e293b"; b.style.color=sel?c:"#64748b"; b.style.border=sel?`2px solid ${c}`:"2px solid #334155";
+    });
+  }else{
+    const cols={clear:"#10b981",moderate:"#f59e0b",heavy:"#ef4444"};
+    ["clear","moderate","heavy"].forEach(sv=>{
+      const b=document.getElementById(`mo-${f}-${sv}`);if(!b)return;
+      const sel=sv===v,c=cols[sv]; b.style.background=sel?`${c}20`:"#1e293b"; b.style.color=sel?c:"#64748b"; b.style.border=sel?`2px solid ${c}`:"2px solid #334155";
+    });
+  }
+}
+function closeT(){document.getElementById("tmodal").style.display="none";}
+function saveT(){
+  const e={...mform,actualMinutes:document.getElementById("tact").value,notes:document.getElementById("tnotes").value,date:fd(new Date()),time:ft(new Date()),id:Date.now()};
+  const k=`${tab}Log`; logs[k]=[...(logs[k]||[]),e];
+  save(); updateTabs(); closeT(); renderPanel();
+  toast("✅ Logged! AI learns from this next check.");
+}
+
+// ─── TOAST ────────────────────────────────────────────────────────────────────
+function toast(msg){
+  const el=document.createElement("div");
+  el.textContent=msg;
+  el.style.cssText="position:fixed;top:16px;left:50%;transform:translateX(-50%);background:#1e293b;color:#f1f5f9;padding:10px 18px;border-radius:20px;font-size:13px;font-weight:600;z-index:300;box-shadow:0 4px 20px rgba(0,0,0,0.5);border:1px solid #334155;white-space:nowrap;";
+  document.body.appendChild(el); setTimeout(()=>el.remove(),2500);
+}
+
+// ─── PWA INSTALL ──────────────────────────────────────────────────────────────
+window.addEventListener("beforeinstallprompt", e=>{
+  e.preventDefault();
+  deferredInstallPrompt=e;
+  // Show install prompt if not dismissed before
+  if(!localStorage.getItem("installDismissed")){
+    document.getElementById("install-prompt").style.display="block";
+  }
+});
+function installApp(){
+  if(!deferredInstallPrompt) return;
+  deferredInstallPrompt.prompt();
+  deferredInstallPrompt.userChoice.then(()=>{
+    deferredInstallPrompt=null;
+    document.getElementById("install-prompt").style.display="none";
+  });
+}
+function dismissInstall(){
+  localStorage.setItem("installDismissed","1");
+  document.getElementById("install-prompt").style.display="none";
+}
+window.addEventListener("appinstalled", ()=>{
+  document.getElementById("install-prompt").style.display="none";
+  toast("🎉 Commute Watch installed!");
+});
+
+// ─── SERVICE WORKER ───────────────────────────────────────────────────────────
+if("serviceWorker" in navigator){
+  window.addEventListener("load", ()=>{
+    navigator.serviceWorker.register("sw.js").catch(()=>{});
+  });
+}
+
+// ─── INIT ─────────────────────────────────────────────────────────────────────
+load(); updateTabs(); renderPanel(); doFetch(false);
+</script>
+</body>
+</html>
