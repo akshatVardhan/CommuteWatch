@@ -40,6 +40,28 @@ Rule: take Bijwasan only if Expy is 10–15+ min slower.`,
   },
 };
 
+// ─── PROVIDERS ───────────────────────────────────────────────────────────────
+const PROVIDERS = {
+  gemini: {
+    name:"Gemini Flash", badge:"Free", badgeColor:"#10b981", color:"#10b981",
+    placeholder:"AIzaSy…",
+    note:'Free: 15 req/min, 1,500/day. Get key at <span style="color:#10b981;font-weight:600;">aistudio.google.com</span> → Get API key.',
+    storageKey:"cw_key_gemini",
+  },
+  anthropic: {
+    name:"Claude Haiku", badge:"~₹4/mo", badgeColor:"#f59e0b", color:"#06b6d4",
+    placeholder:"sk-ant-api03-…",
+    note:'Pay-as-you-go (~$0.25/1M tokens). Get key at <span style="color:#06b6d4;font-weight:600;">console.anthropic.com</span> → API Keys.',
+    storageKey:"cw_key_anthropic",
+  },
+  openai: {
+    name:"GPT-4o mini", badge:"Free trial", badgeColor:"#a78bfa", color:"#a78bfa",
+    placeholder:"sk-proj-…",
+    note:'New accounts get $5 free credit. Get key at <span style="color:#a78bfa;font-weight:600;">platform.openai.com</span> → API Keys.',
+    storageKey:"cw_key_openai",
+  },
+};
+
 // ─── STATE ────────────────────────────────────────────────────────────────────
 let tab    = new Date().getHours() < 14 ? "morning" : "evening";
 let logs   = {morningLog:[], eveningLog:[]};
@@ -54,6 +76,12 @@ let deferredInstallPrompt = null;
 // ─── STORAGE ──────────────────────────────────────────────────────────────────
 function load(){
   try{
+    // Migrate old single-provider key → anthropic slot, set provider
+    const oldKey=localStorage.getItem("cw_apikey");
+    if(oldKey && !localStorage.getItem("cw_key_anthropic")){
+      localStorage.setItem("cw_key_anthropic", oldKey);
+      if(!localStorage.getItem("cw_provider")) localStorage.setItem("cw_provider","anthropic");
+    }
     const s=localStorage.getItem("cw10");
     if(s){
       const p=JSON.parse(s);
@@ -65,43 +93,102 @@ function save(){
   try{ localStorage.setItem("cw10",JSON.stringify({logs,res,lastTs,weather})); }catch{}
 }
 
-// ─── API KEY ──────────────────────────────────────────────────────────────────
-function getApiKey(){ return localStorage.getItem("cw_apikey")||""; }
+// ─── PROVIDER KEY MANAGEMENT ──────────────────────────────────────────────────
+function getProvider(){ return localStorage.getItem("cw_provider")||"gemini"; }
+function getProviderKey(pid){
+  const p=PROVIDERS[pid]; if(!p) return "";
+  return localStorage.getItem(p.storageKey)||"";
+}
+function saveProviderKey(pid,key){
+  const p=PROVIDERS[pid]; if(p) localStorage.setItem(p.storageKey,key);
+}
+function selectProvider(pid){
+  localStorage.setItem("cw_provider",pid);
+  renderSettings();
+}
 
 function saveKey(){
-  const v=(document.getElementById("key-input").value||"").trim();
+  const pid=getProvider(), prov=PROVIDERS[pid];
+  const v=(document.getElementById("key-input")?.value||"").trim();
   if(!v){ toast("⚠️ Enter an API key first"); return; }
-  if(!v.startsWith("sk-")){ toast("⚠️ Key should start with sk-"); return; }
-  localStorage.setItem("cw_apikey",v);
-  updateKeyStatus();
+  if(pid==="anthropic"&&!v.startsWith("sk-ant-")){ toast("⚠️ Claude keys start with sk-ant-"); return; }
+  if(pid==="openai"&&!v.startsWith("sk-")){ toast("⚠️ OpenAI keys start with sk-"); return; }
+  if(pid==="gemini"&&!v.startsWith("AIza")){ toast("⚠️ Gemini keys start with AIza"); return; }
+  saveProviderKey(pid,v);
   closeSettings();
-  toast("✅ API key saved");
+  toast(`✅ ${prov.name} key saved`);
   if(res[tab]?.error==="no-api-key"||res[tab]?.error==="invalid-api-key") doFetch(false);
 }
 
 function clearKey(){
-  if(!confirm("Remove the saved API key?")) return;
-  localStorage.removeItem("cw_apikey");
-  document.getElementById("key-input").value="";
-  updateKeyStatus();
-  toast("🗑 API key cleared");
+  const pid=getProvider(), prov=PROVIDERS[pid];
+  if(!confirm(`Remove the saved ${prov.name} API key?`)) return;
+  localStorage.removeItem(prov.storageKey);
+  const inp=document.getElementById("key-input");
+  if(inp) inp.value="";
+  renderSettings();
+  toast(`🗑 ${prov.name} key cleared`);
 }
 
 function toggleKeyVis(){
   const inp=document.getElementById("key-input"),btn=document.getElementById("key-vis-btn");
+  if(!inp||!btn) return;
   if(inp.type==="password"){inp.type="text";btn.textContent="Hide";}
   else{inp.type="password";btn.textContent="Show";}
 }
 
-function updateKeyStatus(){
-  const k=getApiKey(),el=document.getElementById("key-status");
-  if(!el) return;
-  if(k){
-    const masked=k.slice(0,12)+"…"+k.slice(-4);
-    el.innerHTML=`<span style="color:#10b981;font-weight:700;">✓ Key saved:</span> <span style="font-family:monospace;font-size:11px;color:#475569;">${masked}</span>`;
-  }else{
-    el.innerHTML=`<span style="color:#ef4444;font-weight:700;">✗ No key set</span> — analysis won't work without it.`;
-  }
+function renderSettings(){
+  const el=document.getElementById("settings-content"); if(!el) return;
+  const pid=getProvider(), prov=PROVIDERS[pid];
+  const key=getProviderKey(pid);
+  const masked=key?key.slice(0,8)+"…"+key.slice(-4):null;
+
+  let h=`<div style="margin-bottom:14px;">
+    <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:8px;">AI Provider</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;">`;
+  Object.entries(PROVIDERS).forEach(([id,p])=>{
+    const sel=id===pid;
+    h+=`<button onclick="selectProvider('${id}')" class="tap-btn"
+      style="padding:9px 4px;border-radius:10px;font-size:11px;font-weight:700;text-align:center;font-family:inherit;
+             border:${sel?`2px solid ${p.color}`:`1px solid #334155`};
+             background:${sel?`${p.color}18`:`#1e293b`};
+             color:${sel?p.color:`#475569`};">
+      <div style="margin-bottom:4px;">${p.name}</div>
+      <div style="font-size:10px;font-weight:600;background:${sel?p.color+"22":"#0f172a"};
+                  color:${p.badgeColor};padding:2px 6px;border-radius:6px;display:inline-block;">${p.badge}</div>
+    </button>`;
+  });
+  h+=`</div></div>
+  <div style="background:#1e293b;border-radius:12px;padding:14px;margin-bottom:16px;border:1px solid #334155;">
+    <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:10px;">${prov.name} API Key</div>
+    <div id="key-status" style="font-size:12px;margin-bottom:10px;min-height:18px;">
+      ${key
+        ?`<span style="color:#10b981;font-weight:700;">✓ Key saved:</span> <span style="font-family:monospace;font-size:11px;color:#475569;">${masked}</span>`
+        :`<span style="color:#ef4444;font-weight:700;">✗ No key set</span> — analysis won't work without it.`}
+    </div>
+    <div style="position:relative;">
+      <input id="key-input" type="password" class="key-input" placeholder="${prov.placeholder}"
+        autocomplete="off" autocorrect="off" spellcheck="false"
+        onkeydown="if(event.key==='Enter')saveKey()"/>
+      <button id="key-vis-btn" onclick="toggleKeyVis()"
+        style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;color:#475569;font-size:12px;font-weight:600;cursor:pointer;padding:2px 4px;">Show</button>
+    </div>
+    <div style="display:flex;gap:8px;margin-top:12px;">
+      <button onclick="saveKey()"
+        style="background:linear-gradient(135deg,${prov.color},#0284c7);color:#fff;border:none;border-radius:9px;padding:9px 20px;font-size:13px;font-weight:700;font-family:inherit;">Save Key</button>
+      <button onclick="clearKey()"
+        style="background:none;border:1px solid #334155;border-radius:9px;padding:9px 14px;font-size:13px;color:#475569;font-family:inherit;">Clear</button>
+    </div>
+    <div style="margin-top:12px;font-size:11px;color:#334155;line-height:1.8;">${prov.note}<br>
+      Stored only in this browser's local storage — never transmitted elsewhere.
+    </div>
+  </div>
+  <div style="font-size:11px;color:#1e293b;text-align:center;padding:4px 0 2px;">Commute Watch · Dwarka ↔ Gurugram</div>`;
+
+  el.innerHTML=h;
+  // Set input value programmatically to avoid attribute encoding issues
+  const inp=document.getElementById("key-input");
+  if(inp) inp.value=key||"";
 }
 
 // ─── HOLIDAYS ─────────────────────────────────────────────────────────────────
@@ -290,12 +377,13 @@ const DC  = {clear:"#10b981",moderate:"#f59e0b",heavy:"#ef4444",unknown:"#475569
 const TC  = {clear:"#065f46",moderate:"#92400e",heavy:"#991b1b",unknown:"#64748b"};
 
 function errMsg(code){
+  const pname=PROVIDERS[getProvider()]?.name||"AI";
   const map={
     "offline":         "You're offline. Connect to get a fresh analysis.",
-    "no-api-key":      "API key not set. Add your Anthropic API key in Settings.",
-    "invalid-api-key": "Invalid API key. Check your key in Settings.",
-    "rate-limited":    "Rate limited by Claude API. Wait a minute and try again.",
-    "quota-exceeded":  "API quota exceeded. Check your Anthropic account.",
+    "no-api-key":      `API key not set. Add your ${pname} API key in Settings.`,
+    "invalid-api-key": `Invalid ${pname} API key. Check your key in Settings.`,
+    "rate-limited":    `Rate limited by ${pname}. Wait a minute and try again.`,
+    "quota-exceeded":  "API quota exceeded. Check your account.",
     "timeout":         "Request timed out (15s). Check your connection and retry.",
     "bad-response":    "Unexpected response format from AI. Try again.",
   };
@@ -319,31 +407,98 @@ function tick(){
 }
 setInterval(tick,30000); tick();
 
-// ─── CLAUDE ANALYSIS ──────────────────────────────────────────────────────────
+// ─── AI PROVIDER CALLS ────────────────────────────────────────────────────────
+async function callAnthropic(prompt, key, controller){
+  let r;
+  try{
+    r=await fetch("https://api.anthropic.com/v1/messages",{
+      method:"POST", signal:controller.signal,
+      headers:{
+        "Content-Type":"application/json",
+        "x-api-key":key,
+        "anthropic-version":"2023-06-01",
+        "anthropic-dangerous-direct-browser-access":"true",
+      },
+      body:JSON.stringify({model:"claude-haiku-4-5-20251001",max_tokens:700,messages:[{role:"user",content:prompt}]}),
+    });
+  }catch(e){ throw new Error(e.name==="AbortError"?"timeout":"offline"); }
+  if(r.status===401) throw new Error("invalid-api-key");
+  if(r.status===429) throw new Error("rate-limited");
+  if(r.status===529||r.status===503) throw new Error("api-error-"+r.status);
+  if(!r.ok) throw new Error("api-error-"+r.status);
+  let d; try{ d=await r.json(); }catch{ throw new Error("bad-response"); }
+  if(d.error) throw new Error(d.error.type==="authentication_error"?"invalid-api-key":d.error.message||"api-error");
+  const text=(d.content?.[0]?.text||"").replace(/```json|```/g,"").trim();
+  if(!text) throw new Error("bad-response");
+  try{ return JSON.parse(text); }catch{ throw new Error("bad-response"); }
+}
+
+async function callGemini(prompt, key, controller){
+  let r;
+  try{
+    r=await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${encodeURIComponent(key)}`,
+      {
+        method:"POST", signal:controller.signal,
+        headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({
+          contents:[{parts:[{text:prompt}]}],
+          generationConfig:{maxOutputTokens:700},
+        }),
+      }
+    );
+  }catch(e){ throw new Error(e.name==="AbortError"?"timeout":"offline"); }
+  if(r.status===400||r.status===403) throw new Error("invalid-api-key");
+  if(r.status===429) throw new Error("rate-limited");
+  if(!r.ok) throw new Error("api-error-"+r.status);
+  let d; try{ d=await r.json(); }catch{ throw new Error("bad-response"); }
+  if(d.error) throw new Error("api-error");
+  const text=(d.candidates?.[0]?.content?.parts?.[0]?.text||"").replace(/```json|```/g,"").trim();
+  if(!text) throw new Error("bad-response");
+  try{ return JSON.parse(text); }catch{ throw new Error("bad-response"); }
+}
+
+async function callOpenAI(prompt, key, controller){
+  let r;
+  try{
+    r=await fetch("https://api.openai.com/v1/chat/completions",{
+      method:"POST", signal:controller.signal,
+      headers:{"Content-Type":"application/json","Authorization":`Bearer ${key}`},
+      body:JSON.stringify({model:"gpt-4o-mini",max_tokens:700,messages:[{role:"user",content:prompt}]}),
+    });
+  }catch(e){ throw new Error(e.name==="AbortError"?"timeout":"offline"); }
+  if(r.status===401) throw new Error("invalid-api-key");
+  if(r.status===429) throw new Error("rate-limited");
+  if(!r.ok) throw new Error("api-error-"+r.status);
+  let d; try{ d=await r.json(); }catch{ throw new Error("bad-response"); }
+  if(d.error) throw new Error("api-error");
+  const text=(d.choices?.[0]?.message?.content||"").replace(/```json|```/g,"").trim();
+  if(!text) throw new Error("bad-response");
+  try{ return JSON.parse(text); }catch{ throw new Error("bad-response"); }
+}
+
+// ─── ANALYSE ──────────────────────────────────────────────────────────────────
 async function analyse(){
-  const apiKey=getApiKey();
-  if(!apiKey){ openSettings(); throw new Error("no-api-key"); }
+  const pid=getProvider(), key=getProviderKey(pid);
+  if(!key){ openSettings(); throw new Error("no-api-key"); }
   if(!navigator.onLine) throw new Error("offline");
 
   const cfg=ROUTES[tab],now=new Date(),pi=getPeakInfo(now);
   const holiday=getTodayHoliday(now);
 
-  // Training log context
   const tlog=(logs[`${tab}Log`]||[]).slice(-10).reverse();
   const tctx=tlog.length
     ?"USER TRAINING DATA (most recent first):\n"+tlog.map(l=>`- ${l.date} ${l.time}: CP1=${l.cp1}, CP2=${l.cp2}, CP3=${l.cp3}, took ${l.routeTaken}, actual=${l.actualMinutes}min. Notes:"${l.notes}"`).join("\n")
     :"No training data yet — use typical Delhi-NCR patterns.";
 
-  // Weather context
-  const wxLine = weather
-    ? `WEATHER: ${weather.emoji} ${weather.label}, ${weather.temp}°C`+
+  const wxLine=weather
+    ?`WEATHER: ${weather.emoji} ${weather.label}, ${weather.temp}°C`+
       (weather.visibility<5000?`, visibility ${(weather.visibility/1000).toFixed(1)}km`:"")+
       (weather.impact==="extreme"?" — SEVERE CONDITIONS, add 20-30min to all estimates":
        weather.impact==="high"?" — adverse conditions, add 10-15min to all estimates":
        weather.impact==="moderate"?" — minor delays expected":"")
-    : "WEATHER: unavailable";
+    :"WEATHER: unavailable";
 
-  // Day patterns context
   const dpText=dayPatternsPromptText(tab);
 
   const prompt=`You are a hyperlocal Delhi-NCR traffic intelligence system.
@@ -372,37 +527,17 @@ Respond ONLY in exact JSON (no markdown):
 
   const controller=new AbortController();
   const tid=setTimeout(()=>controller.abort(),15000);
-  let r;
+  let result;
   try{
-    r=await fetch("https://api.anthropic.com/v1/messages",{
-      method:"POST",
-      signal:controller.signal,
-      headers:{
-        "Content-Type":"application/json",
-        "x-api-key":apiKey,
-        "anthropic-version":"2023-06-01",
-        "anthropic-dangerous-direct-browser-access":"true",
-      },
-      body:JSON.stringify({model:"claude-haiku-4-5-20251001",max_tokens:700,messages:[{role:"user",content:prompt}]}),
-    });
+    if(pid==="gemini")        result=await callGemini(prompt,key,controller);
+    else if(pid==="openai")   result=await callOpenAI(prompt,key,controller);
+    else                      result=await callAnthropic(prompt,key,controller);
   }catch(e){
     clearTimeout(tid);
-    throw new Error(e.name==="AbortError"?"timeout":"offline");
+    throw new Error(e.message||"unknown");
   }
   clearTimeout(tid);
-
-  if(r.status===401) throw new Error("invalid-api-key");
-  if(r.status===429) throw new Error("rate-limited");
-  if(r.status===529||r.status===503) throw new Error("api-error-"+r.status);
-  if(!r.ok) throw new Error("api-error-"+r.status);
-
-  let d;
-  try{ d=await r.json(); }catch{ throw new Error("bad-response"); }
-  if(d.error) throw new Error(d.error.type==="authentication_error"?"invalid-api-key":d.error.message||"api-error");
-
-  const text=(d.content?.[0]?.text||"").replace(/```json|```/g,"").trim();
-  if(!text) throw new Error("bad-response");
-  try{ return JSON.parse(text); }catch{ throw new Error("bad-response"); }
+  return result;
 }
 
 // ─── FETCH ────────────────────────────────────────────────────────────────────
@@ -412,7 +547,7 @@ async function doFetch(silent=false){
     if(!silent) toast("📵 Offline — showing cached analysis");
     renderPanel(); return;
   }
-  if(silent&&!getApiKey()) return;
+  if(silent&&!getProviderKey(getProvider())) return;
 
   fetchWeather(); // fire-and-forget; renders when done
 
@@ -720,10 +855,7 @@ function saveT(){
 
 // ─── SETTINGS MODAL ───────────────────────────────────────────────────────────
 function openSettings(){
-  document.getElementById("key-input").value=getApiKey();
-  document.getElementById("key-input").type="password";
-  document.getElementById("key-vis-btn").textContent="Show";
-  updateKeyStatus();
+  renderSettings();
   document.getElementById("smodal").style.display="flex";
 }
 function closeSettings(){ document.getElementById("smodal").style.display="none"; }
@@ -774,7 +906,7 @@ if("serviceWorker" in navigator){
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 load(); updateTabs(); renderPanel();
 fetchWeather();
-if(!getApiKey()){
+if(!getProviderKey(getProvider())){
   setTimeout(()=>openSettings(), 350);
 }else{
   doFetch(false);
