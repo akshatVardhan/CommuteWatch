@@ -46,6 +46,8 @@ let logs   = {morningLog:[], eveningLog:[]};
 let res    = {morning:null, evening:null};
 let busy   = false;
 let lastTs = null;
+let weather= null;
+let wxBusy = false;
 let mform  = {cp1:"moderate",cp2:"moderate",cp3:"heavy",routeTaken:"expressway"};
 let deferredInstallPrompt = null;
 
@@ -53,11 +55,14 @@ let deferredInstallPrompt = null;
 function load(){
   try{
     const s=localStorage.getItem("cw10");
-    if(s){ const p=JSON.parse(s); logs=p.logs||logs; res=p.res||res; lastTs=p.lastTs||null; }
+    if(s){
+      const p=JSON.parse(s);
+      logs=p.logs||logs; res=p.res||res; lastTs=p.lastTs||null; weather=p.weather||null;
+    }
   }catch{}
 }
 function save(){
-  try{ localStorage.setItem("cw10",JSON.stringify({logs,res,lastTs})); }catch{}
+  try{ localStorage.setItem("cw10",JSON.stringify({logs,res,lastTs,weather})); }catch{}
 }
 
 // ─── API KEY ──────────────────────────────────────────────────────────────────
@@ -99,6 +104,167 @@ function updateKeyStatus(){
   }
 }
 
+// ─── HOLIDAYS ─────────────────────────────────────────────────────────────────
+// Fixed annual (M/D without leading zeros)
+const HOLIDAY_FIXED = {
+  "1/26":"Republic Day",
+  "4/14":"Dr. Ambedkar Jayanti",
+  "8/15":"Independence Day",
+  "10/2":"Gandhi Jayanti",
+  "12/25":"Christmas",
+};
+// Year-specific (YYYY/M/D) — lunar/approximate dates
+const HOLIDAY_YEAR = {
+  "2025/3/14":"Holi","2025/3/31":"Eid ul-Fitr","2025/4/18":"Good Friday",
+  "2025/5/12":"Buddha Purnima","2025/6/7":"Eid ul-Adha","2025/8/27":"Janmashtami",
+  "2025/10/20":"Diwali","2025/11/5":"Guru Nanak Jayanti",
+  "2026/3/3":"Holi","2026/4/3":"Good Friday","2026/10/19":"Dussehra",
+  "2026/11/8":"Diwali","2026/11/24":"Guru Nanak Jayanti",
+};
+
+function getTodayHoliday(d=new Date()){
+  const fk=`${d.getMonth()+1}/${d.getDate()}`;
+  const yk=`${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()}`;
+  return HOLIDAY_FIXED[fk]||HOLIDAY_YEAR[yk]||null;
+}
+
+// ─── WEATHER ──────────────────────────────────────────────────────────────────
+const WX_CACHE = 30 * 60 * 1000;
+
+// WMO weather interpretation — covers codes relevant to Delhi-NCR
+const WX_MAP = [
+  [0,   "Clear sky",      "☀️",  "low"],
+  [1,   "Mainly clear",   "🌤️",  "low"],
+  [2,   "Partly cloudy",  "⛅",  "low"],
+  [3,   "Overcast",       "☁️",  "low"],
+  [45,  "Fog",            "🌫️",  "high"],
+  [48,  "Rime fog",       "🌫️",  "high"],
+  [51,  "Light drizzle",  "🌦️",  "moderate"],
+  [53,  "Drizzle",        "🌧️",  "moderate"],
+  [55,  "Heavy drizzle",  "🌧️",  "high"],
+  [61,  "Light rain",     "🌧️",  "moderate"],
+  [63,  "Rain",           "🌧️",  "high"],
+  [65,  "Heavy rain",     "⛈️",  "high"],
+  [71,  "Light snow",     "🌨️",  "high"],
+  [80,  "Rain showers",   "🌦️",  "moderate"],
+  [81,  "Showers",        "🌧️",  "high"],
+  [82,  "Heavy showers",  "⛈️",  "high"],
+  [95,  "Thunderstorm",   "⛈️",  "high"],
+  [99,  "Thunderstorm",   "⛈️",  "high"],
+];
+
+function getWxInfo(code, vis=10000){
+  // Walk backwards to find the largest matching code ≤ given code
+  const entry = [...WX_MAP].reverse().find(([c])=>c<=code) || WX_MAP[0];
+  let [,label,emoji,impact] = entry;
+  // Boost impact for very poor visibility (Delhi winter fog / dust)
+  if(vis < 200)  return {label, emoji, impact:"extreme"};
+  if(vis < 1000 && impact!=="high") impact="high";
+  return {label, emoji, impact};
+}
+
+async function fetchWeather(){
+  if(wxBusy) return;
+  if(weather && (Date.now()-weather.ts) < WX_CACHE) return;
+  if(!navigator.onLine) return;
+  wxBusy=true;
+  try{
+    const ctrl=new AbortController();
+    setTimeout(()=>ctrl.abort(), 8000);
+    const r=await fetch(
+      "https://api.open-meteo.com/v1/forecast?latitude=28.52&longitude=77.04&current=temperature_2m,weathercode,visibility,precipitation,windspeed_10m&timezone=Asia%2FKolkata",
+      {signal:ctrl.signal}
+    );
+    if(!r.ok) throw new Error("wx");
+    const d=await r.json();
+    const c=d.current;
+    const vis=c.visibility??10000;
+    const wi=getWxInfo(c.weathercode??0, vis);
+    weather={
+      temp:Math.round(c.temperature_2m),
+      code:c.weathercode,
+      label:wi.label, emoji:wi.emoji, impact:wi.impact,
+      visibility:vis,
+      precipitation:c.precipitation??0,
+      ts:Date.now(),
+    };
+    save();
+    renderPanel();
+  }catch{ /* weather is a nice-to-have — fail silently */ }
+  wxBusy=false;
+}
+
+// ─── DAY PATTERNS ─────────────────────────────────────────────────────────────
+function getDayPatterns(direction){
+  const log=logs[`${direction}Log`]||[];
+  const byDay={};
+  log.forEach(e=>{
+    const mins=Number(e.actualMinutes);
+    if(!mins||!e.date) return;
+    const day=e.date.split(",")[0].trim(); // "Mon", "Tue", etc.
+    if(!byDay[day]) byDay[day]={total:0,count:0};
+    byDay[day].total+=mins;
+    byDay[day].count++;
+  });
+  const ORDER=["Mon","Tue","Wed","Thu","Fri","Sat","Sun"];
+  return Object.entries(byDay)
+    .filter(([,v])=>v.count>=2)
+    .map(([day,v])=>({day, avg:Math.round(v.total/v.count), count:v.count}))
+    .sort((a,b)=>ORDER.indexOf(a.day)-ORDER.indexOf(b.day));
+}
+
+// Returns a compact text string for the AI prompt
+function dayPatternsPromptText(direction){
+  const p=getDayPatterns(direction);
+  if(!p.length) return "";
+  return "USER DAY PATTERNS (≥2 trips each): "+p.map(({day,avg,count})=>`${day} avg ${avg}min (${count} trips)`).join(", ");
+}
+
+// ─── DEPARTURE ADVISOR ────────────────────────────────────────────────────────
+function getDepartureAdvisor(d=new Date()){
+  const frac=d.getHours()+d.getMinutes()/60;
+  const holiday=getTodayHoliday(d);
+
+  if(d.getDay()===0||d.getDay()===6)
+    return {icon:"🟢",title:"Weekend",msg:"Light traffic expected all day — roads should flow freely.",color:"#10b981",bg:"#10b98112",border:"#10b98130"};
+
+  if(holiday)
+    return {icon:"🎉",title:holiday,msg:"Public holiday — significantly lighter traffic than a normal workday.",color:"#10b981",bg:"#10b98112",border:"#10b98130"};
+
+  if(tab==="morning"){
+    if(frac<6||frac>12) return null;
+    if(frac<7.5)
+      return {icon:"🟢",title:"Clear window",msg:"Roads are free-flowing — smooth ~32 min Expy run expected.",color:"#10b981",bg:"#10b98112",border:"#10b98130"};
+    if(frac<8){
+      const left=Math.round((8-frac)*60);
+      return {icon:"⏳",title:`Rush in ~${left} min`,msg:"Morning rush peaks 8–10 AM. Leave now for the best window, or wait until after 10:30.",color:"#f59e0b",bg:"#f59e0b12",border:"#f59e0b30"};
+    }
+    if(frac<=10)
+      return {icon:"⚠️",title:"Morning rush active",msg:"Kherki Daula bottleneck likely heavy. Bijwasan often saves 10+ min right now.",color:"#ef4444",bg:"#ef444412",border:"#ef444430"};
+    if(frac<=11)
+      return {icon:"⏳",title:"Rush winding down",msg:"Traffic clearing. Roads should be smooth within 30 min.",color:"#f59e0b",bg:"#f59e0b12",border:"#f59e0b30"};
+    return null;
+  }
+
+  if(tab==="evening"){
+    if(frac<15||frac>22) return null;
+    if(frac<17)
+      return {icon:"🟢",title:"Clear window",msg:"Afternoon roads free-flowing — smooth ~35 min Expy run expected.",color:"#10b981",bg:"#10b98112",border:"#10b98130"};
+    if(frac<17.5){
+      const left=Math.round((17.5-frac)*60);
+      return {icon:"⏳",title:`Rush in ~${left} min`,msg:"Evening rush peaks 5:30–8:30 PM. Leave now for smooth flow, or wait until after 9 PM.",color:"#f59e0b",bg:"#f59e0b12",border:"#f59e0b30"};
+    }
+    if(frac<=20.5)
+      return {icon:"⚠️",title:"Evening rush active",msg:"NH-48 entry from Gurugram is likely congested. Check both routes before heading out.",color:"#ef4444",bg:"#ef444412",border:"#ef444430"};
+    if(frac<=21.5)
+      return {icon:"⏳",title:"Rush winding down",msg:"Traffic clearing. Roads should be smooth by 9:30 PM.",color:"#f59e0b",bg:"#f59e0b12",border:"#f59e0b30"};
+    if(frac<=22)
+      return {icon:"🟢",title:"Clear now",msg:"Evening rush has ended. Roads flowing freely.",color:"#10b981",bg:"#10b98112",border:"#10b98130"};
+    return null;
+  }
+  return null;
+}
+
 // ─── HELPERS ──────────────────────────────────────────────────────────────────
 const ft = d=>d.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit",hour12:true});
 const fd = d=>d.toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:"short"});
@@ -106,6 +272,8 @@ const fd = d=>d.toLocaleDateString("en-IN",{weekday:"short",day:"numeric",month:
 function getPeakInfo(d=new Date()){
   const h=d.getHours(),m=d.getMinutes(),frac=h+m/60;
   if(d.getDay()===0||d.getDay()===6) return {peak:false,label:"● Off-peak · Weekend",color:"#10b981"};
+  const holiday=getTodayHoliday(d);
+  if(holiday) return {peak:false,label:`● Off-peak · ${holiday}`,color:"#10b981"};
   if(frac>=8   &&frac<=10.5) return {peak:true, label:"● Morning rush",        color:"#ef4444"};
   if(frac>=17.5&&frac<=21)   return {peak:true, label:"● Evening rush",        color:"#ef4444"};
   if(frac>=7.5 &&frac<8)    return {peak:false,label:"● Rush starting soon",  color:"#f59e0b"};
@@ -158,10 +326,25 @@ async function analyse(){
   if(!navigator.onLine) throw new Error("offline");
 
   const cfg=ROUTES[tab],now=new Date(),pi=getPeakInfo(now);
+  const holiday=getTodayHoliday(now);
+
+  // Training log context
   const tlog=(logs[`${tab}Log`]||[]).slice(-10).reverse();
   const tctx=tlog.length
     ?"USER TRAINING DATA (most recent first):\n"+tlog.map(l=>`- ${l.date} ${l.time}: CP1=${l.cp1}, CP2=${l.cp2}, CP3=${l.cp3}, took ${l.routeTaken}, actual=${l.actualMinutes}min. Notes:"${l.notes}"`).join("\n")
     :"No training data yet — use typical Delhi-NCR patterns.";
+
+  // Weather context
+  const wxLine = weather
+    ? `WEATHER: ${weather.emoji} ${weather.label}, ${weather.temp}°C`+
+      (weather.visibility<5000?`, visibility ${(weather.visibility/1000).toFixed(1)}km`:"")+
+      (weather.impact==="extreme"?" — SEVERE CONDITIONS, add 20-30min to all estimates":
+       weather.impact==="high"?" — adverse conditions, add 10-15min to all estimates":
+       weather.impact==="moderate"?" — minor delays expected":"")
+    : "WEATHER: unavailable";
+
+  // Day patterns context
+  const dpText=dayPatternsPromptText(tab);
 
   const prompt=`You are a hyperlocal Delhi-NCR traffic intelligence system.
 
@@ -169,10 +352,13 @@ ${cfg.aiCtx}
 
 TIME: ${ft(now)} on ${now.toLocaleDateString("en-IN",{weekday:"long"})}
 PEAK STATUS: ${pi.peak?"IN PEAK RUSH HOUR":"off-peak"} | WEEKEND: ${wk(now)?"YES":"NO"}
+${holiday?`HOLIDAY: ${holiday} today — significantly lighter traffic than a normal weekday.`:""}
+${wxLine}
+${dpText}
 
 ${tctx}
 
-Give a realistic assessment. During peak rush hours, be honest about congestion at critical checkpoints.
+Give a realistic assessment. During peak hours and bad weather, be honest about delays at critical checkpoints.
 
 Respond ONLY in exact JSON (no markdown):
 {
@@ -228,6 +414,8 @@ async function doFetch(silent=false){
   }
   if(silent&&!getApiKey()) return;
 
+  fetchWeather(); // fire-and-forget; renders when done
+
   busy=true;
   if(!silent) renderPanel();
   try{
@@ -247,16 +435,47 @@ setInterval(()=>doFetch(true), AUTO_REFRESH);
 // ─── RENDER ───────────────────────────────────────────────────────────────────
 function renderPanel(){
   const cfg=ROUTES[tab],r=res[tab],ac=cfg.expyColor,log=logs[`${tab}Log`]||[];
+  const now=new Date();
   let h="";
 
-  // Route strip
+  // Route strip — with weather footer
+  const wxFooter = weather
+    ? (()=>{
+        const vis=weather.visibility;
+        const visStr=vis<10000?` · ${(vis/1000).toFixed(1)}km vis`:"";
+        const impactColor=weather.impact==="extreme"?"#ef4444":weather.impact==="high"?"#ef4444":weather.impact==="moderate"?"#f59e0b":null;
+        const impactBadge=impactColor
+          ?`<span style="font-size:10px;background:${impactColor}22;color:${impactColor};border-radius:6px;padding:2px 7px;font-weight:700;">${weather.impact==="extreme"?"⚠️ severe delays":"adds delays"}</span>`
+          :"";
+        return `<div style="border-top:1px solid #0f172a;margin-top:8px;padding-top:8px;display:flex;align-items:center;justify-content:space-between;">
+          <span style="font-size:12px;color:#64748b;">${weather.emoji} ${weather.label} · ${weather.temp}°C${visStr}</span>
+          ${impactBadge}
+        </div>`;
+      })()
+    : wxBusy
+      ? `<div style="border-top:1px solid #0f172a;margin-top:8px;padding-top:8px;font-size:11px;color:#334155;display:flex;align-items:center;gap:5px;"><span class="spinner" style="width:10px;height:10px;border-width:1.5px;"></span> Loading weather…</div>`
+      : "";
+
   h+=`<div style="background:#1e293b;border-radius:12px;padding:11px 13px;margin-bottom:12px;border:1px solid #334155;">
     <div style="font-size:11px;color:#475569;font-weight:600;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:5px;">Route</div>
     <div style="font-size:12px;color:#94a3b8;line-height:1.7;">
       <span style="color:#64748b;">From</span> ${cfg.fromLabel}<br>
       <span style="color:#64748b;">To&nbsp;&nbsp;&nbsp;&nbsp;</span> ${cfg.toLabel}
     </div>
+    ${wxFooter}
   </div>`;
+
+  // Departure advisor
+  const adv=getDepartureAdvisor(now);
+  if(adv){
+    h+=`<div style="background:${adv.bg};border:1px solid ${adv.border};border-radius:12px;padding:11px 13px;margin-bottom:12px;display:flex;align-items:flex-start;gap:10px;">
+      <span style="font-size:18px;line-height:1.3;">${adv.icon}</span>
+      <div>
+        <div style="font-size:12px;font-weight:700;color:${adv.color};margin-bottom:2px;">${adv.title}</div>
+        <div style="font-size:12px;color:#94a3b8;line-height:1.5;">${adv.msg}</div>
+      </div>
+    </div>`;
+  }
 
   // Action bar
   h+=`<div style="display:flex;gap:8px;margin-bottom:10px;">
@@ -287,7 +506,7 @@ function renderPanel(){
     </div>`;
   }
 
-  // Skeleton while loading with no cached data
+  // Skeleton
   if(busy&&!r?.data){
     h+=`<div class="skel" style="height:90px;margin-bottom:10px;"></div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px;">
@@ -356,7 +575,7 @@ function renderPanel(){
     </div>`;
 
     h+=`<div style="background:#0f172a;border:1px solid #1e293b;border-radius:10px;padding:8px 12px;margin-bottom:12px;font-size:11px;color:#334155;text-align:center;line-height:1.6;">
-      ⚠️ AI estimates based on time & training data — not a live feed.<br>Tap Maps buttons below for real-time traffic.
+      ⚠️ AI estimates based on time, weather & training data — not a live feed.<br>Tap Maps buttons below for real-time traffic.
     </div>`;
   }
 
@@ -367,11 +586,13 @@ function renderPanel(){
     <a href="${cfg.mapsBij}"  target="_blank" class="tap-btn" style="background:#2d1b6920;border:1.5px solid #7c3aed44;border-radius:11px;padding:12px 0;text-align:center;font-size:13px;font-weight:700;color:#a78bfa;display:block;">🔄 Bijwasan Route</a>
   </div>`;
 
-  // Training log
+  // Training log — with day patterns summary
+  const patterns=getDayPatterns(tab);
   h+=`<button onclick="toggleLog()" id="ltbtn" class="tap-btn" style="width:100%;background:none;border:1px solid #1e293b;border-radius:10px;padding:9px 0;color:#334155;font-weight:600;font-size:12px;margin-bottom:8px;font-family:inherit;">
     ▼ Training log (${log.length} entries)
   </button>
   <div id="lpanel" style="display:none;background:#1e293b;border-radius:12px;padding:13px;border:1px solid #334155;margin-bottom:14px;">`;
+
   if(!log.length){
     h+=`<div style="font-size:13px;color:#334155;text-align:center;padding:12px 0;">No logs yet.<br>Tap "+ Log" after each commute — AI gets smarter every time.</div>`;
   }else{
@@ -390,6 +611,26 @@ function renderPanel(){
       </div>`;
     });
     if(log.length>7) h+=`<div style="font-size:11px;color:#1e293b;text-align:center;padding-top:4px;">+ ${log.length-7} older entries</div>`;
+
+    // Day patterns — only shown when we have enough data
+    if(patterns.length){
+      // Find min/max avg for colour coding
+      const avgs=patterns.map(p=>p.avg);
+      const minAvg=Math.min(...avgs), maxAvg=Math.max(...avgs);
+      h+=`<div style="border-top:1px solid #0f172a;margin-top:8px;padding-top:10px;">
+        <div style="font-size:10px;font-weight:700;color:#334155;text-transform:uppercase;letter-spacing:0.8px;margin-bottom:7px;">Your patterns by day</div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">`;
+      patterns.forEach(({day,avg,count})=>{
+        const ratio=(avg-minAvg)/Math.max(maxAvg-minAvg,1);
+        const col=ratio>0.66?"#ef4444":ratio>0.33?"#f59e0b":"#10b981";
+        h+=`<div style="background:#0f172a;border:1px solid ${col}44;border-radius:8px;padding:5px 9px;text-align:center;">
+          <div style="font-size:10px;color:#475569;font-weight:600;">${day}</div>
+          <div style="font-size:13px;font-weight:800;color:${col};">${avg}<span style="font-size:9px;font-weight:500;color:#334155;">m</span></div>
+          <div style="font-size:9px;color:#334155;">${count} trips</div>
+        </div>`;
+      });
+      h+=`</div></div>`;
+    }
   }
   h+=`</div>`;
   document.getElementById("panel").innerHTML=h;
@@ -501,7 +742,7 @@ window.addEventListener("beforeinstallprompt", e=>{
   e.preventDefault();
   deferredInstallPrompt=e;
   const ts=Number(localStorage.getItem("installDismissedAt")||0);
-  const cooldown=3*24*60*60*1000; // resurface after 3 days
+  const cooldown=3*24*60*60*1000;
   if(!ts||(Date.now()-ts)>cooldown){
     document.getElementById("install-prompt").style.display="block";
   }
@@ -532,6 +773,7 @@ if("serviceWorker" in navigator){
 
 // ─── INIT ─────────────────────────────────────────────────────────────────────
 load(); updateTabs(); renderPanel();
+fetchWeather();
 if(!getApiKey()){
   setTimeout(()=>openSettings(), 350);
 }else{
