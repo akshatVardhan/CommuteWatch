@@ -44,7 +44,7 @@ Rule: take Bijwasan only if Expy is 10–15+ min slower.`,
 const PROVIDERS = {
   gemini: {
     name:"Gemini Flash", badge:"Free", badgeColor:"#10b981", color:"#10b981",
-    placeholder:"AIzaSy…",
+    placeholder:"AQ.Ab… or AIzaSy…",
     note:'Free: 15 req/min, 1,500/day. Get key at <span style="color:#10b981;font-weight:600;">aistudio.google.com</span> → Get API key.',
     storageKey:"cw_key_gemini",
   },
@@ -113,7 +113,7 @@ function saveKey(){
   if(!v){ toast("⚠️ Enter an API key first"); return; }
   if(pid==="anthropic"&&!v.startsWith("sk-ant-")){ toast("⚠️ Claude keys start with sk-ant-"); return; }
   if(pid==="openai"&&!v.startsWith("sk-")){ toast("⚠️ OpenAI keys start with sk-"); return; }
-  if(pid==="gemini"&&!v.startsWith("AIza")){ toast("⚠️ Gemini keys start with AIza"); return; }
+  if(pid==="gemini"&&v.length<20){ toast("⚠️ That doesn't look like a valid Gemini key"); return; }
   saveProviderKey(pid,v);
   closeSettings();
   toast(`✅ ${prov.name} key saved`);
