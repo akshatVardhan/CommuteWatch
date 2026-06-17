@@ -1,5 +1,5 @@
-// Commute Watch — Service Worker v3
-const CACHE = "commute-watch-v3";
+// Commute Watch — Service Worker v4
+const CACHE = "commute-watch-v4";
 const SHELL = ["./", "./index.html", "./manifest.json", "./styles.css", "./app.js"];
 
 self.addEventListener("install", e=>{
