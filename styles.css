@@ -1,0 +1,43 @@
+/* Reset & base */
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
+html,body{height:100%;overscroll-behavior:none;}
+body{background:#0f172a;font-family:'Inter',system-ui,sans-serif;color:#f1f5f9;min-height:100vh;min-height:-webkit-fill-available;}
+
+/* Animations */
+@keyframes spin{to{transform:rotate(360deg);}}
+@keyframes shimmer{0%{background-position:200% 0}100%{background-position:-200% 0}}
+@keyframes slideUp{from{transform:translateY(24px);opacity:0}to{transform:translateY(0);opacity:1}}
+
+/* UI primitives */
+.spinner{display:inline-block;width:14px;height:14px;border:2px solid #475569;border-top-color:#94a3b8;border-radius:50%;animation:spin 0.8s linear infinite;}
+.skel{background:linear-gradient(90deg,#1e293b 25%,#263548 50%,#1e293b 75%);background-size:200% 100%;animation:shimmer 1.4s infinite;border-radius:10px;}
+.badge{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;}
+.badge-clear{background:#d1fae5;color:#065f46;}
+.badge-moderate{background:#fef3c7;color:#92400e;}
+.badge-heavy{background:#fee2e2;color:#991b1b;}
+.badge-unknown{background:#1e293b;color:#64748b;}
+.dot{display:inline-block;border-radius:50%;flex-shrink:0;}
+.dot-clear{background:#10b981;}
+.dot-moderate{background:#f59e0b;}
+.dot-heavy{background:#ef4444;box-shadow:0 0 0 3px #ef444433;}
+.dot-unknown{background:#475569;}
+button{font-family:inherit;cursor:pointer;-webkit-tap-highlight-color:transparent;}
+a{text-decoration:none;-webkit-tap-highlight-color:transparent;}
+.tap-btn{transition:opacity 0.15s;}
+.tap-btn:active{opacity:0.7;}
+
+/* Offline banner */
+#offline-bar{display:none;background:#92400e;color:#fef3c7;text-align:center;padding:6px;font-size:12px;font-weight:600;}
+body.offline #offline-bar{display:block;}
+
+/* Install prompt */
+#install-prompt{display:none;position:fixed;bottom:0;left:0;right:0;background:#1e293b;border-top:1px solid #334155;padding:14px 16px;z-index:50;max-width:480px;margin:0 auto;}
+
+/* Modal overlay — shared bottom-sheet pattern */
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.85);z-index:100;align-items:flex-end;justify-content:center;}
+.modal-sheet{background:#0f172a;border-radius:20px 20px 0 0;width:100%;max-width:480px;padding:20px 18px 40px;border:1px solid #1e293b;max-height:90vh;overflow-y:auto;animation:slideUp 0.22s ease-out;}
+
+/* Settings form inputs */
+.key-input{width:100%;padding:10px 44px 10px 12px;border-radius:10px;font-size:13px;border:1.5px solid #334155;outline:none;background:#1e293b;color:#f1f5f9;font-family:monospace;letter-spacing:0.04em;}
+.key-input:focus{border-color:#06b6d4;}
+.key-input::placeholder{font-family:system-ui,sans-serif;letter-spacing:normal;color:#334155;}
